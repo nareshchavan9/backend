@@ -1,0 +1,34 @@
+{
+  "label_map": {
+    "F": 0,
+    "M": 1,
+    "N": 2,
+    "Q": 3,
+    "S": 4,
+    "V": 5
+  },
+  "inv_label_map": {
+    "0": "F",
+    "1": "M",
+    "2": "N",
+    "3": "Q",
+    "4": "S",
+    "5": "V"
+  },
+  "display_names": {
+    "N": "Normal Beat",
+    "S": "Supraventricular Premature Beat",
+    "V": "Premature Ventricular Contraction",
+    "F": "Fusion Beat",
+    "Q": "Unclassifiable Beat",
+    "M": "Myocardial Infarction / Malignant"
+  },
+  "classes": [
+    "F",
+    "M",
+    "N",
+    "Q",
+    "S",
+    "V"
+  ]
+}
