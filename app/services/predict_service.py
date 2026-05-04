@@ -20,22 +20,41 @@ async def validate_ecg_with_gemini(image_bytes: bytes) -> bool:
         
     try:
         genai.configure(api_key=api_key)
-        model = genai.GenerativeModel('gemini-1.5-flash-latest')
+        
+        # We'll try the 'latest' alias first as it's the most reliable
+        model_name = 'gemini-flash-latest'
+        try:
+            print(f"DEBUG: Attempting validation with model: {model_name}")
+            model = genai.GenerativeModel(model_name)
+        except Exception as e:
+            print(f"DEBUG: Failed to initialize {model_name}: {e}")
+            # Fallback to the specific 2.0 version we saw in your list
+            model_name = 'gemini-2.0-flash'
+            print(f"DEBUG: Attempting fallback with model: {model_name}")
+            model = genai.GenerativeModel(model_name)
+
         img = Image.open(io.BytesIO(image_bytes))
         
-        prompt = "Is this an ECG/EKG (Electrocardiogram) heart rate plot? Answer only with 'YES' or 'NO'."
+        prompt = "Analyze this image. Is it an ECG/EKG (Electrocardiogram) heart rate plot or a graph showing cardiac waves? Answer 'YES' if it looks like medical cardiac data, or 'NO' if it is something else (like a person, animal, or object). Answer only with one word."
         
         # Use async version for better performance
         response = await model.generate_content_async([prompt, img])
         
+        # Check if response has parts to avoid errors
+        if not response.candidates:
+            print("DEBUG: Gemini returned no candidates (possible safety block).")
+            return True
+
         result_text = response.text.strip().upper()
         print(f"DEBUG: Gemini ECG Validation response: '{result_text}'")
         
-        if "NO" in result_text:
+        # Only reject if it's a clear NO. If it says anything else, assume it's okay.
+        if "NO" in result_text and "YES" not in result_text:
             return False
         return True
     except Exception as e:
-        print(f"DEBUG: Gemini Validation Error (Falling back to True): {e}")
+        print(f"DEBUG: Gemini Validation Error: {e}")
+        # If the API fails (quota, network, etc.), we allow the upload to proceed
         return True
 
 async def run_prediction(image_bytes: bytes, user_id: str, filename: str, notes: str = "", doctor_id: str = None):
