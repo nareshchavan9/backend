@@ -1,8 +1,17 @@
 import os
 import keras
+from keras.layers import Dense
 from dotenv import load_dotenv
 
 load_dotenv()
+
+# Custom wrapper to handle Keras version mismatch for 'quantization_config'
+@keras.saving.register_keras_serializable()
+class SafeDense(Dense):
+    def __init__(self, **kwargs):
+        # Strip out the incompatible argument if present
+        kwargs.pop('quantization_config', None)
+        super().__init__(**kwargs)
 
 class ModelLoader:
     _instance = None
@@ -22,9 +31,12 @@ class ModelLoader:
         print(f"DEBUG: Attempting to load model from {model_path}...")
         if os.path.exists(model_path):
             try:
-                # Use compile=False because we only need the model for inference
-                # and don't have the definitions for custom losses/optimizers
-                self.model = keras.models.load_model(model_path, compile=False)
+                # Use SafeDense to bypass the quantization_config error
+                self.model = keras.models.load_model(
+                    model_path, 
+                    compile=False, 
+                    custom_objects={"Dense": SafeDense}
+                )
                 print(f"SUCCESS: Model loaded successfully from {model_path}")
                 print(f"DEBUG: Model input shape: {self.model.input_shape}")
             except Exception as e:
