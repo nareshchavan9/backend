@@ -9,29 +9,38 @@ from app.services.model_loader import model_loader
 from app.services.preprocess import preprocess_image, get_class_label
 from app.database.db import get_database
 
-def validate_ecg_with_gemini(image_bytes: bytes) -> bool:
+async def validate_ecg_with_gemini(image_bytes: bytes) -> bool:
+    """
+    Uses Gemini Vision to verify if the uploaded image is actually an ECG plot.
+    """
     api_key = os.getenv("GOOGLE_API_KEY")
     if not api_key:
+        print("DEBUG: No GOOGLE_API_KEY found, skipping Gemini validation.")
         return True
         
     try:
         genai.configure(api_key=api_key)
-        model = genai.GenerativeModel('gemini-flash-latest')
+        model = genai.GenerativeModel('gemini-1.5-flash-latest')
         img = Image.open(io.BytesIO(image_bytes))
         
-        prompt = "Analyze this image carefully. Is it an ECG (Electrocardiogram) or EKG plot showing heart waves? Reply with ONLY 'YES' or 'NO'."
-        response = model.generate_content([prompt, img])
+        prompt = "Is this an ECG/EKG (Electrocardiogram) heart rate plot? Answer only with 'YES' or 'NO'."
         
-        if "NO" in response.text.strip().upper():
+        # Use async version for better performance
+        response = await model.generate_content_async([prompt, img])
+        
+        result_text = response.text.strip().upper()
+        print(f"DEBUG: Gemini ECG Validation response: '{result_text}'")
+        
+        if "NO" in result_text:
             return False
         return True
     except Exception as e:
-        print(f"Gemini Validation Error: {e}")
+        print(f"DEBUG: Gemini Validation Error (Falling back to True): {e}")
         return True
 
 async def run_prediction(image_bytes: bytes, user_id: str, filename: str, notes: str = "", doctor_id: str = None):
     # Validate with Gemini
-    is_valid = validate_ecg_with_gemini(image_bytes)
+    is_valid = await validate_ecg_with_gemini(image_bytes)
     if not is_valid:
         raise HTTPException(status_code=400, detail="Invalid input: The uploaded image does not appear to be a valid ECG/EKG plot.")
 
