@@ -5,13 +5,17 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-# Custom wrapper to handle Keras version mismatch for 'quantization_config'
-@keras.saving.register_keras_serializable()
-class SafeDense(Dense):
-    def __init__(self, **kwargs):
-        # Strip out the incompatible argument if present
-        kwargs.pop('quantization_config', None)
-        super().__init__(**kwargs)
+# Aggressive Monkey-Patch to solve Keras version mismatch globally
+# This intercept the Dense layer initialization and removes the 'quantization_config'
+# which is not recognized by some Keras 3.x versions during deserialization.
+_original_dense_init = Dense.__init__
+
+def _patched_dense_init(self, *args, **kwargs):
+    if 'quantization_config' in kwargs:
+        kwargs.pop('quantization_config')
+    return _original_dense_init(self, *args, **kwargs)
+
+Dense.__init__ = _patched_dense_init
 
 class ModelLoader:
     _instance = None
@@ -31,12 +35,9 @@ class ModelLoader:
         print(f"DEBUG: Attempting to load model from {model_path}...")
         if os.path.exists(model_path):
             try:
-                # Use SafeDense to bypass the quantization_config error
-                self.model = keras.models.load_model(
-                    model_path, 
-                    compile=False, 
-                    custom_objects={"Dense": SafeDense}
-                )
+                # Use compile=False because we only need for inference.
+                # The Dense layer is now monkey-patched above.
+                self.model = keras.models.load_model(model_path, compile=False)
                 print(f"SUCCESS: Model loaded successfully from {model_path}")
                 print(f"DEBUG: Model input shape: {self.model.input_shape}")
             except Exception as e:
