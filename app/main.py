@@ -4,6 +4,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from dotenv import load_dotenv
 
 # Load environment variables
+os.environ["KERAS_BACKEND"] = "tensorflow"
 load_dotenv()
 
 from app.routes import auth, predict, reports, ai_agent
