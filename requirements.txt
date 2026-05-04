@@ -7,13 +7,11 @@ python-multipart
 python-jose[cryptography]
 bcrypt
 python-dotenv
-tensorflow
+tensorflow-cpu
 keras>=3.0.0
 pillow
 numpy
 reportlab
-python-magic-bin; sys_platform == 'win32'
-python-magic; sys_platform != 'win32'
 pytest
 httpx
 cloudinary
