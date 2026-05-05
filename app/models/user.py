@@ -15,7 +15,6 @@ class UserBase(BaseModel):
     gender: Optional[str] = None
     medical_history: Optional[str] = None
     profile_image: Optional[str] = None
-    is_2fa_enabled: bool = False
     lifestyle_notes: List[dict] = []
 
 class UserCreate(UserBase):

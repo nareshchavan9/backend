@@ -3,12 +3,10 @@ from app.models.user import UserCreate, UserLogin, Token, UserResponse
 from app.database.db import get_database
 from app.utils.auth_utils import get_password_hash, verify_password, create_access_token
 from app.middleware.auth_middleware import get_current_user
-from app.services.email_service import send_otp_email
 from app.services.cloudinary_service import upload_image_to_cloud
 from datetime import timedelta, datetime
 from typing import Optional, List
 from bson import ObjectId
-import random
 
 router = APIRouter()
 
@@ -42,23 +40,6 @@ async def login(user_data: UserLogin):
             headers={"WWW-Authenticate": "Bearer"},
         )
     
-    if user.get("is_2fa_enabled"):
-        otp = str(random.randint(100000, 999999))
-        # Store OTP in DB with 10 min expiry
-        await db["otps"].update_one(
-            {"email": user["email"]},
-            {"$set": {"otp": otp, "expires_at": datetime.utcnow() + timedelta(minutes=10)}},
-            upsert=True
-        )
-        send_otp_email(user["email"], otp)
-        return {
-            "access_token": "pending_2fa", 
-            "token_type": "bearer",
-            "role": user["role"],
-            "name": user["name"],
-            "email": user["email"]
-        }
-
     access_token = create_access_token(data={"sub": user["email"], "role": user["role"]})
     return {
         "access_token": access_token, 
@@ -68,45 +49,6 @@ async def login(user_data: UserLogin):
         "profile_image": user.get("profile_image"),
         "email": user["email"]
     }
-
-@router.post("/verify-otp", response_model=Token)
-async def verify_otp(data: dict):
-    email = data.get("email")
-    otp = data.get("otp")
-    
-    db = get_database()
-    otp_record = await db["otps"].find_one({"email": email})
-    
-    if not otp_record or otp_record["otp"] != otp:
-        raise HTTPException(status_code=401, detail="Invalid verification code")
-    
-    if otp_record["expires_at"] < datetime.utcnow():
-        raise HTTPException(status_code=401, detail="Verification code expired")
-    
-    # Delete OTP after use
-    await db["otps"].delete_one({"email": email})
-    
-    user = await db["users"].find_one({"email": email})
-    access_token = create_access_token(data={"sub": user["email"], "role": user["role"]})
-    
-    return {
-        "access_token": access_token, 
-        "token_type": "bearer",
-        "role": user["role"],
-        "name": user["name"],
-        "profile_image": user.get("profile_image"),
-        "email": user["email"]
-    }
-
-@router.post("/toggle-2fa")
-async def toggle_2fa(current_user: dict = Depends(get_current_user)):
-    db = get_database()
-    new_status = not current_user.get("is_2fa_enabled", False)
-    await db["users"].update_one(
-        {"_id": ObjectId(current_user["_id"])},
-        {"$set": {"is_2fa_enabled": new_status}}
-    )
-    return {"is_2fa_enabled": new_status}
 
 @router.post("/lifestyle-notes")
 async def add_lifestyle_note(note: dict, current_user: dict = Depends(get_current_user)):
