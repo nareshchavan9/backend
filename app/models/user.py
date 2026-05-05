@@ -14,6 +14,7 @@ class UserBase(BaseModel):
     age: Optional[int] = None
     gender: Optional[str] = None
     medical_history: Optional[str] = None
+    profile_image: Optional[str] = None
 
 class UserCreate(UserBase):
     password: str
@@ -33,3 +34,5 @@ class Token(BaseModel):
     token_type: str
     role: str
     name: str
+    profile_image: Optional[str] = None
+    email: Optional[str] = None

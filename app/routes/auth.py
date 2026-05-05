@@ -3,6 +3,8 @@ from app.models.user import UserCreate, UserLogin, Token, UserResponse
 from app.database.db import get_database
 from app.utils.auth_utils import get_password_hash, verify_password, create_access_token
 from datetime import timedelta
+from typing import Optional
+from bson import ObjectId
 
 router = APIRouter()
 
@@ -41,8 +43,49 @@ async def login(user_data: UserLogin):
         "access_token": access_token, 
         "token_type": "bearer",
         "role": user["role"],
-        "name": user["name"]
+        "name": user["name"],
+        "profile_image": user.get("profile_image"),
+        "email": user["email"]
     }
+
+from fastapi import File, UploadFile, Form
+from app.middleware.auth_middleware import get_current_user
+from app.services.cloudinary_service import upload_image_to_cloud
+
+@router.put("/profile", response_model=UserResponse)
+async def update_profile(
+    name: str = Form(...),
+    email: str = Form(...),
+    image: Optional[UploadFile] = File(None),
+    current_user: dict = Depends(get_current_user)
+):
+    db = get_database()
+    
+    # Check if email is already taken by someone else
+    if email != current_user["email"]:
+        existing_user = await db["users"].find_one({"email": email})
+        if existing_user:
+            raise HTTPException(status_code=400, detail="Email already taken")
+
+    update_data = {
+        "name": name,
+        "email": email
+    }
+
+    if image:
+        image_bytes = await image.read()
+        image_url = upload_image_to_cloud(image_bytes, folder="profile_images")
+        if image_url:
+            update_data["profile_image"] = image_url
+
+    await db["users"].update_one(
+        {"_id": ObjectId(current_user["_id"])},
+        {"$set": update_data}
+    )
+    
+    updated_user = await db["users"].find_one({"_id": ObjectId(current_user["_id"])})
+    updated_user["_id"] = str(updated_user["_id"])
+    return updated_user
 
 @router.post("/reset-password")
 async def reset_password(data: dict):
