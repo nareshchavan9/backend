@@ -4,207 +4,179 @@ from reportlab.lib.colors import HexColor, black, white
 from io import BytesIO
 from datetime import datetime
 
-# Color palette for beat type bars (matches frontend)
-BAR_COLORS = [
-    HexColor('#2D3FE2'),  # healthcare-blue
-    HexColor('#14B8A6'),  # teal-500
-    HexColor('#FB923C'),  # orange-400
-    HexColor('#A855F7'),  # purple-500
-    HexColor('#F87171'),  # red-400
-    HexColor('#F472B6'),  # pink-400
-]
-
+# Institutional Color Palette
+COLOR_MEDICAL_DARK = HexColor('#0F172A')
+COLOR_TAN = HexColor('#EDD5B3')
+COLOR_SLATE_600 = HexColor('#475569')
+COLOR_SLATE_400 = HexColor('#94A3B8')
+COLOR_SLATE_100 = HexColor('#F1F5F9')
 
 def generate_pdf_report(prediction_data: dict, user_data: dict, doctor_data: dict = None):
     buffer = BytesIO()
     p = canvas.Canvas(buffer, pagesize=letter)
     width, height = letter
-    cx = width / 2  # horizontal center of page
+    cx = width / 2
+
+    # ── Page Border (Institutional) ──────────────────────────────────────────────
+    p.setStrokeColor(COLOR_SLATE_100)
+    p.setLineWidth(1)
+    p.rect(20, 20, width - 40, height - 40)
 
     # ── Header ───────────────────────────────────────────────────────────────────
-    p.setFillColor(HexColor('#1A1C20'))
-    p.rect(0, height - 70, width, 70, stroke=0, fill=1)
+    p.setFillColor(COLOR_MEDICAL_DARK)
+    p.rect(0, height - 80, width, 80, stroke=0, fill=1)
 
-    p.setFont("Helvetica-Bold", 20)
+    p.setFont("Helvetica-Bold", 18)
     p.setFillColor(white)
-    p.drawCentredString(cx, height - 40, "Arrhythmia Detection Report")
+    p.drawCentredString(cx, height - 45, "HEARTSYNC NEURAL SYSTEMS")
+    
+    p.setFont("Helvetica", 10)
+    p.setFillColor(COLOR_TAN)
+    p.drawCentredString(cx, height - 62, "CLINICAL CARDIOVASCULAR DIAGNOSTIC REPORT")
 
-    p.setFont("Helvetica", 9)
-    p.setFillColor(HexColor('#94A3B8'))
-    p.drawCentredString(cx, height - 58, f"Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+    p.setFont("Helvetica", 8)
+    p.setFillColor(white)
+    p.drawRightString(width - 40, height - 45, f"ID: {prediction_data.get('id', 'N/A')[-12:].upper()}")
+    p.drawRightString(width - 40, height - 60, datetime.now().strftime('%Y-%m-%d %H:%M'))
 
-    y = height - 100
+    y = height - 120
 
-    # ── Section heading helper ────────────────────────────────────────────────────
-    def section_heading(title):
+    # ── Section helper ───────────────────────────────────────────────────────────
+    def section_title(title):
         nonlocal y
+        y -= 10
+        p.setFont("Helvetica-Bold", 9)
+        p.setFillColor(COLOR_SLATE_600)
+        p.drawString(40, y, title.upper())
         y -= 6
-        p.setFont("Helvetica-Bold", 11)
-        p.setFillColor(HexColor('#2D3FE2'))
-        p.drawCentredString(cx, y, title)
-        y -= 4
-        p.setStrokeColor(HexColor('#2D3FE2'))
-        p.line(cx - 130, y, cx + 130, y)
-        y -= 16
+        p.setStrokeColor(COLOR_SLATE_100)
+        p.setLineWidth(0.5)
+        p.line(40, y, width - 40, y)
+        y -= 20
 
-    # ── Patient Information ───────────────────────────────────────────────────────
-    section_heading("PATIENT INFORMATION")
-
-    fields = [
-        ("Name",   user_data.get('name', 'N/A')),
-        ("Email",  user_data.get('email', 'N/A')),
-        ("Age",    str(user_data.get('age', 'N/A'))),
-        ("Gender", str(user_data.get('gender', 'N/A'))),
+    # ── Subject Information ──────────────────────────────────────────────────────
+    section_title("Patient Records")
+    
+    p.setFont("Helvetica-Bold", 10)
+    p.setFillColor(COLOR_MEDICAL_DARK)
+    
+    col1 = 40
+    col2 = cx
+    
+    info = [
+        ("Subject Name", user_data.get('name', 'N/A')),
+        ("Clinical ID", user_data.get('email', 'N/A')),
+        ("Report Date", datetime.now().strftime('%B %d, %Y')),
+        ("Analysis Mode", "Neural Engine v4.2")
     ]
-    for label, value in fields:
+    
+    for i, (label, val) in enumerate(info):
+        row = i // 2
+        col = i % 2
+        curr_y = y - row * 35  # Increased row spacing
+        curr_x = col1 if col == 0 else col2
+        
+        p.setFont("Helvetica-Bold", 7)
+        p.setFillColor(COLOR_SLATE_400)
+        p.drawString(curr_x, curr_y, label.upper())
+        
         p.setFont("Helvetica-Bold", 10)
-        p.setFillColor(HexColor('#475569'))
-        p.drawRightString(cx - 10, y, f"{label}:")
-        p.setFont("Helvetica", 10)
-        p.setFillColor(black)
-        p.drawString(cx, y, value)
-        y -= 17
+        p.setFillColor(COLOR_MEDICAL_DARK)
+        p.drawString(curr_x, curr_y - 14, str(val))
+        
+    y -= 80  # Adjusted y after records
 
-    y -= 10
-
-    # ── Diagnosis Results ─────────────────────────────────────────────────────────
-    section_heading("DIAGNOSIS RESULTS")
-
-    is_normal  = str(prediction_data.get('prediction', '')).lower() == 'normal'
-    box_color  = HexColor('#DCFCE7') if is_normal else HexColor('#FEE2E2')
-    text_color = HexColor('#16A34A') if is_normal else HexColor('#DC2626')
-
-    box_w, box_h = 360, 68
-    p.setFillColor(box_color)
-    p.roundRect(cx - box_w / 2, y - box_h + 12, box_w, box_h, 8, stroke=0, fill=1)
-
-    p.setFont("Helvetica-Bold", 14)
-    p.setFillColor(text_color)
-    p.drawCentredString(cx, y - 8, f"Classification: {prediction_data.get('prediction', 'N/A')}")
-
+    # ── Analysis Core ────────────────────────────────────────────────────────────
+    section_title("Diagnostic Classification")
+    
+    is_normal = str(prediction_data.get('prediction', '')).lower() == 'normal'
+    
+    # Classification Box
+    box_h = 85
+    p.setStrokeColor(COLOR_SLATE_100)
+    p.setFillColor(COLOR_SLATE_100)
+    p.rect(40, y - box_h, width - 80, box_h, fill=1, stroke=1)
+    
+    # Label
+    p.setFont("Helvetica-Bold", 8)
+    p.setFillColor(COLOR_SLATE_600)
+    p.drawString(60, y - 20, "NEURAL INTERPRETATION")
+    
+    # Prediction Value (Dynamic Font Size)
+    prediction_text = str(prediction_data.get('prediction', 'N/A')).upper()
+    font_size = 16
+    if len(prediction_text) > 30:
+        font_size = 11
+    elif len(prediction_text) > 20:
+        font_size = 13
+        
+    p.setFont("Helvetica-Bold", font_size)
+    p.setFillColor(COLOR_MEDICAL_DARK if is_normal else HexColor('#991B1B'))
+    p.drawString(60, y - 45, prediction_text)
+    
+    # Confidence (Now on its own line at the bottom)
     conf = prediction_data.get('confidence', 0)
-    p.setFont("Helvetica", 11)
-    p.setFillColor(HexColor('#334155'))
-    p.drawCentredString(cx, y - 24, f"Confidence Score: {conf * 100:.2f}%")
+    p.setFont("Helvetica-Bold", 9)
+    p.setFillColor(COLOR_SLATE_600)
+    p.drawString(60, y - 70, f"CONFIDENCE INDEX: {conf * 100:.2f}%")
+    
+    y -= box_h + 20
 
-    # Timestamp
-    timestamp = prediction_data.get('timestamp')
-    date_str, time_str = 'N/A', 'N/A'
-    if isinstance(timestamp, datetime):
-        date_str = timestamp.strftime('%Y-%m-%d')
-        time_str = timestamp.strftime('%H:%M:%S')
-    elif timestamp:
-        ts_str = str(timestamp)
-        for sep in (' ', 'T'):
-            if sep in ts_str:
-                date_str, time_str = ts_str.split(sep, 1)
-                break
-        else:
-            date_str = ts_str
-
-    p.setFont("Helvetica", 9)
-    p.setFillColor(HexColor('#64748B'))
-    p.drawCentredString(cx, y - 42, f"Date: {date_str}   |   Time: {time_str}")
-
-    y -= box_h + 18
-
-    # ── Beat Type Distribution ────────────────────────────────────────────────────
+    # ── Informatics Distribution ──────────────────────────────────────────────────
     breakdown = prediction_data.get('breakdown', [])
     if breakdown:
-        section_heading("BEAT TYPE DISTRIBUTION")
-
-        bar_total_w = 340
-        bar_h       = 13
-        label_w     = 110
-        pct_w       = 44
-        track_w     = bar_total_w - label_w - pct_w - 12
-        bar_left    = cx - bar_total_w / 2
-
-        for idx, item in enumerate(breakdown):
-            label_text = str(item.get('label', ''))
-            is_normal = 'normal' in label_text.lower()
+        section_title("Statistical Distribution")
+        
+        bar_w = 300
+        bar_h = 4
+        
+        for item in breakdown:
+            label = str(item.get('label', '')).upper()
+            pct = float(item.get('percentage', 0))
             
-            # Define colors for PDF
-            GREEN = HexColor('#16A34A')
-            RED_DARK = HexColor('#DC2626')
-            ORANGE = HexColor('#F97316')
-            RED_LIGHT = HexColor('#F87171')
-            GRAY = HexColor('#94A3B8')
-
-            if is_normal:
-                color = GREEN
-            elif idx == 0:
-                color = RED_DARK
-            elif idx == 1:
-                color = ORANGE
-            elif idx == 2:
-                color = RED_LIGHT
-            else:
-                color = GRAY
-
-            pct    = min(float(item.get('percentage', 0)), 100)
-            fill_w = track_w * pct / 100
-
-            if len(label_text) > 16:
-                label_text = label_text[:15] + '…'
-
-            # Label (right-aligned)
-            p.setFont("Helvetica", 9)
-            p.setFillColor(HexColor('#334155'))
-            p.drawRightString(bar_left + label_w, y + 2, label_text)
-
-            track_x = bar_left + label_w + 6
-
-            # Background track
-            p.setFillColor(HexColor('#E2E8F0'))
-            p.roundRect(track_x, y, track_w, bar_h, 4, stroke=0, fill=1)
-
-            # Filled portion
-            if fill_w > 0:
-                p.setFillColor(color)
-                p.roundRect(track_x, y, fill_w, bar_h, 4, stroke=0, fill=1)
-
-            # Percentage label
-            p.setFont("Helvetica-Bold", 9)
-            p.setFillColor(color)
-            p.drawString(track_x + track_w + 6, y + 2, f"{pct:.1f}%")
-
-            y -= bar_h + 8
-
-            if y < 110:
+            p.setFont("Helvetica-Bold", 8)
+            p.setFillColor(COLOR_MEDICAL_DARK)
+            p.drawString(40, y, label)
+            
+            p.setFont("Helvetica", 8)
+            p.drawRightString(width - 40, y, f"{pct:.1f}%")
+            
+            y -= 8
+            # Bar Track
+            p.setFillColor(COLOR_SLATE_100)
+            p.rect(40, y, width - 80, bar_h, fill=1, stroke=0)
+            
+            # Bar Fill
+            p.setFillColor(COLOR_TAN if 'normal' in label.lower() else COLOR_MEDICAL_DARK)
+            p.rect(40, y, (width - 80) * (pct/100), bar_h, fill=1, stroke=0)
+            
+            y -= 20
+            
+            if y < 100:
                 p.showPage()
                 y = height - 60
 
-        y -= 6
-
-    # ── Medical Professional ──────────────────────────────────────────────────────
-    section_heading("MEDICAL PROFESSIONAL" if doctor_data else "ASSESSMENT MODE")
-
-    p.setFont("Helvetica", 10)
-    p.setFillColor(black)
-    if doctor_data:
-        for line in [
-            f"Practitioner: Dr. {doctor_data.get('name', 'N/A')}",
-            f"Email: {doctor_data.get('email', 'N/A')}",
-            f"Role: {str(doctor_data.get('role', '')).capitalize()}",
-        ]:
-            p.drawCentredString(cx, y, line)
-            y -= 16
-    else:
-        p.drawCentredString(cx, y, "Mode: Patient Self-Assessment")
-
-    # ── Disclaimer footer ─────────────────────────────────────────────────────────
-    p.setFillColor(HexColor('#F1F5F9'))
-    p.rect(0, 0, width, 70, stroke=0, fill=1)
-
-    p.setFont("Helvetica-Bold", 9)
-    p.setFillColor(HexColor('#475569'))
-    p.drawCentredString(cx, 52, "Disclaimer")
-
-    p.setFont("Helvetica-Oblique", 8)
-    p.setFillColor(HexColor('#64748B'))
-    p.drawCentredString(cx, 37, "This is an AI-generated report for informational purposes only.")
-    p.drawCentredString(cx, 23, "Please consult a qualified medical professional for a definitive diagnosis.")
+    # ── Final Validation ─────────────────────────────────────────────────────────
+    y = 120
+    p.setStrokeColor(COLOR_SLATE_100)
+    p.line(40, y, width - 40, y)
+    
+    p.setFont("Helvetica", 8)
+    p.setFillColor(COLOR_SLATE_400)
+    p.drawCentredString(cx, y - 15, "AUTHENTICATED BY HEARTSYNC CLOUD INFERENCE ENGINE")
+    
+    # ── Disclaimer Footer ────────────────────────────────────────────────────────
+    p.setFillColor(COLOR_SLATE_100)
+    p.rect(0, 0, width, 60, stroke=0, fill=1)
+    
+    p.setFont("Helvetica-Bold", 8)
+    p.setFillColor(COLOR_SLATE_600)
+    p.drawCentredString(cx, 35, "LEGAL DISCLAIMER")
+    
+    p.setFont("Helvetica", 7)
+    p.setFillColor(COLOR_SLATE_400)
+    p.drawCentredString(cx, 22, "This report is generated using advanced neural networks and is intended for clinical assistance only.")
+    p.drawCentredString(cx, 12, "Consult with a board-certified cardiologist for definitive medical intervention.")
 
     p.showPage()
     p.save()
