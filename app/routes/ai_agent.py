@@ -137,8 +137,8 @@ async def chat_with_agent(
                 else:
                     inputs.append({"mime_type": file.content_type, "data": file_bytes})
             
-            # Using synchronous call as a test for stability if async is hanging
-            response = model.generate_content(inputs)
+            # Using async call to prevent blocking the event loop
+            response = await model.generate_content_async(inputs)
             reply = response.text
             mode = "gemini"
         except Exception as e:
