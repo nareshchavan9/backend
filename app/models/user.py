@@ -16,6 +16,7 @@ class UserBase(BaseModel):
     medical_history: Optional[str] = None
     profile_image: Optional[str] = None
     lifestyle_notes: List[dict] = []
+    two_factor_enabled: bool = False
 
 class UserCreate(UserBase):
     password: str
@@ -23,6 +24,10 @@ class UserCreate(UserBase):
 class UserLogin(BaseModel):
     email: EmailStr
     password: str
+
+class OTPVerify(BaseModel):
+    email: EmailStr
+    otp: str
 
 class UserResponse(UserBase):
     id: str = Field(alias="_id")
@@ -37,3 +42,4 @@ class Token(BaseModel):
     name: str
     profile_image: Optional[str] = None
     email: Optional[str] = None
+    two_factor_enabled: bool = False
