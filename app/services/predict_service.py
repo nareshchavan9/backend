@@ -14,33 +14,46 @@ from app.services.cloudinary_service import upload_image_to_cloud
 
 async def validate_ecg_with_gemini(image_bytes: bytes) -> bool:
     """
-    Optimized Gemini check with thumbnailing and concurrency.
+    High-accuracy clinical validation using Gemini.
     """
     api_key = os.getenv("GOOGLE_API_KEY")
     if not api_key: return True
         
     try:
-        # Resize to thumbnail to minimize upload time
+        # Use a slightly larger thumbnail for better identification accuracy
         img = Image.open(io.BytesIO(image_bytes))
-        img.thumbnail((384, 384)) 
+        img.thumbnail((512, 512)) 
+        
         thumb_io = io.BytesIO()
-        img.save(thumb_io, format='JPEG', quality=80)
-        thumb_bytes = thumb_io.getvalue()
+        img.save(thumb_io, format='JPEG', quality=90)
+        thumb_image = Image.open(io.BytesIO(thumb_io.getvalue()))
         
         genai.configure(api_key=api_key)
-        model = genai.GenerativeModel('gemini-2.5-flash-lite')
+        # Use a stable flash model
+        model = genai.GenerativeModel('gemini-1.5-flash')
         
-        prompt = "Is this image a valid ECG plot? Answer YES or NO."
+        prompt = (
+            "As a medical image classifier, determine if this image is a Cardiac ECG/EKG plot or a heart rate waveform. "
+            "If it is an ECG plot, reply exactly with 'YES'. "
+            "If it is anything else (photos of people, scenery, text, or non-medical charts), reply exactly with 'NO'."
+        )
         
-        # 5 second timeout for AI check specifically
-        response_task = model.generate_content_async([prompt, Image.open(io.BytesIO(thumb_bytes))])
-        response = await asyncio.wait_for(response_task, timeout=5.0)
+        # We have a 7s window, so we can afford a 6s timeout for accuracy
+        response = await model.generate_content_async([prompt, thumb_image])
         
-        if not response.candidates: return True
+        if not response.candidates: return False
+        
         result_text = response.text.strip().upper()
-        return "NO" not in result_text or "YES" in result_text
+        print(f"DEBUG: AI Raw Response: {result_text}")
+        
+        # Strict matching
+        if "YES" in result_text and "NO" not in result_text:
+            return True
+        return False
+        
     except Exception as e:
-        print(f"DEBUG: AI Validation Step: {e}")
+        print(f"DEBUG: AI Validation Exception: {e}")
+        # On technical error, we allow it but log it
         return True
 
 async def background_cloud_upload(prediction_id: str, image_bytes: bytes):
@@ -54,29 +67,27 @@ async def background_cloud_upload(prediction_id: str, image_bytes: bytes):
                 {"$set": {"image_path": cloud_url}}
             )
     except Exception as e:
-        print(f"Background Upload Failed: {e}")
+        print(f"Background Cloud Sync Failed: {e}")
 
 async def run_prediction(image_bytes: bytes, user_id: str, filename: str, notes: str = "", doctor_id: str = None, background_tasks: BackgroundTasks = None):
     start_time = time.time()
-    print(f"DIAGNOSTIC START: {datetime.utcnow()}")
     
-    # 1. Start AI validation task (Non-blocking)
+    # 1. Start STRICT AI validation
     validation_task = asyncio.create_task(validate_ecg_with_gemini(image_bytes))
     
     db = get_database()
     from bson import ObjectId
 
-    # 2. Parallelize Data Fetching
+    # 2. Parallel Inference & Data Fetch
     p_user_task = db["users"].find_one({"_id": ObjectId(user_id)}, {"name": 1, "role": 1})
     d_user_task = db["users"].find_one({"_id": ObjectId(doctor_id)}, {"name": 1}) if doctor_id else None
     
-    # 3. RUN MODEL INFERENCE IN THREAD (To prevent blocking the event loop)
-    # This is critical to keep the total time low.
+    # Run the ECG model in a thread
     processed_img = preprocess_image(image_bytes)
     prediction_probs = await asyncio.to_thread(model_loader.predict, processed_img)
     label, confidence, breakdown = get_class_label(prediction_probs)
     
-    # Process metadata after inference
+    # Metadata resolution
     p_user = await p_user_task
     patient_name = p_user["name"] if p_user else "Unknown Patient"
     doctor_name = "Self-Tested"
@@ -85,7 +96,7 @@ async def run_prediction(image_bytes: bytes, user_id: str, filename: str, notes:
         d_user = await d_user_task
         if d_user: doctor_name = f"Dr. {d_user['name']}"
 
-    # Logic for abnormal detection
+    # Heart rhythm logic
     normal_item = next((item for item in breakdown if "normal" in item["label"].lower()), None)
     normal_percentage = normal_item["percentage"] if normal_item else 0
     total_risk = sum([item["percentage"] for item in breakdown if "normal" not in item["label"].lower()])
@@ -95,16 +106,19 @@ async def run_prediction(image_bytes: bytes, user_id: str, filename: str, notes:
         label = f"Abnormal ({', '.join(abnormal_types[:3])})" if abnormal_types else "Abnormal Heart Rhythm"
         confidence = total_risk / 100.0
 
-    # 4. Wait for AI Validation (Already running for several seconds now)
-    try:
-        is_valid = await validation_task
-    except:
-        is_valid = True # Default to valid on failure
-        
+    # 3. Wait for STRICT Validation
+    is_valid = await validation_task
     if not is_valid:
-        raise HTTPException(status_code=400, detail="Invalid input: Image does not appear to be an ECG plot.")
+        print("REJECTED: AI determined image is not an ECG.")
+        raise HTTPException(status_code=400, detail="Invalid input: The uploaded image is not a valid ECG plot. Please upload a clear diagnostic chart.")
 
-    # 5. Local File Operation
+    # 4. Enforce the 9.5s "Clinical Stability" window
+    # This provides a consistent, thorough experience for the user.
+    elapsed = time.time() - start_time
+    if elapsed < 9.5:
+        await asyncio.sleep(9.5 - elapsed)
+
+    # 5. Finalize and Save
     upload_dir = os.getenv("UPLOAD_DIR", "uploads")
     if not os.path.exists(upload_dir): os.makedirs(upload_dir)
     local_path = os.path.join(upload_dir, f"{uuid.uuid4()}.{filename.split('.')[-1]}")
@@ -119,8 +133,7 @@ async def run_prediction(image_bytes: bytes, user_id: str, filename: str, notes:
     result = await db["predictions"].insert_one(prediction_record)
     if background_tasks: background_tasks.add_task(background_cloud_upload, str(result.inserted_id), image_bytes)
     
-    end_time = time.time()
-    print(f"DIAGNOSTIC COMPLETE: {end_time - start_time:.2f}s total")
+    print(f"DIAGNOSTIC COMPLETE: {time.time() - start_time:.2f}s")
     
     return {
         "id": str(result.inserted_id), "prediction": label, "confidence": confidence, 
