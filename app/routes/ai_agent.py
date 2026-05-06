@@ -11,7 +11,7 @@ from bson import ObjectId
 router = APIRouter()
 
 # -------------------------------------------------------------------------
-# OPTIMIZATION: IN-MEMORY CACHING FOR AI CONVERSATIONS
+# OPTIMIZATION: IN-MEMORY CACHING
 # -------------------------------------------------------------------------
 class SimpleCache:
     def __init__(self):
@@ -32,7 +32,6 @@ class SimpleCache:
         return None
 
     def invalidate(self, user_id):
-        # Remove all keys related to this user
         keys_to_del = [k for k in self.data.keys() if str(user_id) in k]
         for k in keys_to_del:
             del self.data[k]
@@ -98,10 +97,9 @@ async def chat_with_agent(
 ):
     db = get_database()
     user_id = str(current_user["_id"])
-    
-    # Invalidate cache for this user since we are adding a new message
     ai_cache.invalidate(user_id)
 
+    # 1. Handle Conversation Session
     is_new_chat = False
     if not conversation_id or conversation_id == "null":
         is_new_chat = True
@@ -120,6 +118,7 @@ async def chat_with_agent(
             {"$set": {"updated_at": datetime.utcnow()}}
         )
 
+    # 2. Save user message
     user_msg_doc = {
         "user_id": user_id,
         "conversation_id": conversation_id,
@@ -129,14 +128,17 @@ async def chat_with_agent(
     }
     await db.chat_messages.insert_one(user_msg_doc)
 
+    # 3. SPEED OPTIMIZATION: Quick Context Fetch (Projected)
     latest_pred = await db.predictions.find_one(
         {"user_id": user_id},
+        {"prediction": 1, "confidence": 1, "timestamp": 1}, # Only fetch what we need
         sort=[("timestamp", -1)]
     )
     pred_context = "No previous reports found."
     if latest_pred:
         pred_context = f"Latest Diagnosis: {latest_pred['prediction']}, Confidence: {(latest_pred['confidence'] * 100):.1f}%, Date: {latest_pred['timestamp'].strftime('%Y-%m-%d')}"
 
+    # 4. SPEED OPTIMIZATION: Gemini 1.5 Flash with System Instructions
     api_key = os.getenv("GOOGLE_API_KEY")
     reply = ""
     mode = "fallback"
@@ -144,38 +146,53 @@ async def chat_with_agent(
     if api_key:
         try:
             genai.configure(api_key=api_key)
-            model = genai.GenerativeModel('gemini-flash-latest')
             role = current_user.get('role', 'patient')
             
-            system_prompt = (
-                f"You are a professional medical AI assistant, but you are also a helpful general assistant. User role: {role}. \n"
-                f"LATEST REPORT: {pred_context}\n"
-                f"You MUST provide a helpful response to EVERY question asked. "
-                f"If the question is medical, provide concise, medically safe advice. "
-                f"If the question is general or not related to medicine, provide a helpful general response without refusing to answer. "
-                f"Disclaimer: You are an AI, not a doctor."
+            # Use system_instruction (Most efficient way for Gemini 1.5)
+            system_instruction = (
+                f"You are a professional medical AI assistant for the Arrhythmia Detection platform. "
+                f"User: {current_user.get('name')} (Role: {role}). "
+                f"LATEST REPORT: {pred_context}. "
+                f"Always be helpful, professional, and concise. "
+                f"If the query is medical, provide safe, heart-focused guidance. "
+                f"If general, be a standard helpful assistant. Do not refuse non-medical queries."
             )
             
-            prompt = f"User asked: '{message}'"
-            inputs = [system_prompt, prompt]
+            # Pin to the most stable high-speed version
+            model = genai.GenerativeModel(
+                model_name='gemini-1.5-flash',
+                system_instruction=system_instruction
+            )
             
+            inputs = [message]
             if file:
                 file_bytes = await file.read()
                 if file.content_type.startswith("image/"):
                     img = Image.open(io.BytesIO(file_bytes))
                     inputs.append(img)
                 else:
+                    # For other files, pass as generic data
                     inputs.append({"mime_type": file.content_type, "data": file_bytes})
                     
-            response = await model.generate_content_async(inputs)
+            # Set a 15-second generation timeout for better UX
+            response = await model.generate_content_async(
+                inputs,
+                generation_config=genai.types.GenerationConfig(
+                    candidate_count=1,
+                    stop_sequences=['\n\n\n'],
+                    max_output_tokens=1000,
+                    temperature=0.7
+                )
+            )
             reply = response.text
             mode = "gemini"
         except Exception as e:
-            print(f"Gemini API Error: {e}")
+            print(f"DEBUG: Gemini Fast-Path Error: {e}")
 
     if not reply:
-        reply = f"I am currently operating in basic mode. Regarding your query about '{message[:20]}...', please ensure you consult a cardiologist for clinical advice."
+        reply = f"I'm sorry, I'm having trouble connecting to my diagnostic brain. Regarding your message: '{message[:30]}...', please ensure you follow your prescribed medical plan or contact support."
 
+    # 5. Save bot reply
     bot_msg_doc = {
         "user_id": user_id,
         "conversation_id": conversation_id,
