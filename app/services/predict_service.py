@@ -22,14 +22,14 @@ async def validate_ecg_with_gemini(image_bytes: bytes) -> bool:
         genai.configure(api_key=api_key)
         
         # We'll try the 'latest' alias first as it's the most reliable
-        model_name = 'gemini-flash-latest'
+        model_name = 'gemini-1.5-flash'
         try:
             print(f"DEBUG: Attempting validation with model: {model_name}")
             model = genai.GenerativeModel(model_name)
         except Exception as e:
             print(f"DEBUG: Failed to initialize {model_name}: {e}")
-            # Fallback to the specific 2.0 version we saw in your list
-            model_name = 'gemini-2.0-flash'
+            # Fallback to standard gemini-pro
+            model_name = 'gemini-pro'
             print(f"DEBUG: Attempting fallback with model: {model_name}")
             model = genai.GenerativeModel(model_name)
 

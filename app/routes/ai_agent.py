@@ -119,8 +119,12 @@ async def chat_with_agent(
             genai.configure(api_key=api_key)
             role = current_user.get('role', 'patient')
             
-            # Use 'gemini-flash-latest' which we confirmed exists
-            model = genai.GenerativeModel('gemini-flash-latest')
+            # Switch to 1.5-flash which has a 1,500 requests/day limit
+            # instead of the preview version which only has 20.
+            try:
+                model = genai.GenerativeModel('gemini-1.5-flash')
+            except:
+                model = genai.GenerativeModel('gemini-pro')
             
             system_prompt = (
                 f"SYSTEM: You are a medical AI assistant for Arrhythmia Detection. User: {current_user.get('name')} ({role}). "
