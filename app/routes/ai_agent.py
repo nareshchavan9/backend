@@ -158,11 +158,18 @@ async def chat_with_agent(
                 f"If general, be a standard helpful assistant. Do not refuse non-medical queries."
             )
             
-            # Pin to the most stable high-speed version
-            model = genai.GenerativeModel(
-                model_name='gemini-1.5-flash',
-                system_instruction=system_instruction
-            )
+            # Use the exact model name available in your environment
+            try:
+                model = genai.GenerativeModel(
+                    model_name='gemini-flash-latest',
+                    system_instruction=system_instruction
+                )
+            except:
+                # Fallback to pro-latest if flash is missing
+                model = genai.GenerativeModel(
+                    model_name='gemini-pro-latest',
+                    system_instruction=system_instruction
+                )
             
             inputs = [message]
             if file:
