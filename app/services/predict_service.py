@@ -58,6 +58,29 @@ async def validate_ecg_with_gemini(image_bytes: bytes) -> bool:
         return True
 
 async def run_prediction(image_bytes: bytes, user_id: str, filename: str, notes: str = "", doctor_id: str = None):
+    db = get_database()
+    patient_name = "Unknown Patient"
+    doctor_name = "Unknown Doctor"
+
+    # Fetch names for denormalization
+    try:
+        p_user = await db["users"].find_one({"_id": ObjectId(user_id)}, {"name": 1})
+        if p_user:
+            patient_name = p_user["name"]
+        
+        if doctor_id:
+            d_user = await db["users"].find_one({"_id": ObjectId(doctor_id)}, {"name": 1})
+            if d_user:
+                doctor_name = f"Dr. {d_user['name']}"
+        else:
+            # Check if user_id is a doctor
+            if p_user and p_user.get("role") in ["doctor", "admin"]:
+                doctor_name = f"Dr. {p_user['name']}"
+            else:
+                doctor_name = "Self-Tested"
+    except Exception as e:
+        print(f"Denormalization Fetch Error: {e}")
+
     # Validate with Gemini
     is_valid = await validate_ecg_with_gemini(image_bytes)
     if not is_valid:
@@ -130,7 +153,9 @@ async def run_prediction(image_bytes: bytes, user_id: str, filename: str, notes:
         "confidence": confidence,
         "breakdown": breakdown,
         "timestamp": datetime.utcnow(),
-        "notes": notes
+        "notes": notes,
+        "patient_name": patient_name,
+        "doctor_name": doctor_name
     }
     
     result = await db["predictions"].insert_one(prediction_record)

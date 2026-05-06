@@ -1,7 +1,7 @@
 from fastapi import APIRouter, Depends, UploadFile, File, Form, HTTPException, Request
 from app.middleware.auth_middleware import get_current_user
 from app.database.db import get_database
-from datetime import datetime
+from datetime import datetime, timedelta
 import os
 import google.generativeai as genai
 from PIL import Image
@@ -10,30 +10,62 @@ from bson import ObjectId
 
 router = APIRouter()
 
+# -------------------------------------------------------------------------
+# OPTIMIZATION: IN-MEMORY CACHING FOR AI CONVERSATIONS
+# -------------------------------------------------------------------------
+class SimpleCache:
+    def __init__(self):
+        self.data = {}
+        self.expiry = {}
+
+    def set(self, key, value, duration=60):
+        self.data[key] = value
+        self.expiry[key] = datetime.utcnow() + timedelta(seconds=duration)
+
+    def get(self, key):
+        if key in self.data:
+            if datetime.utcnow() < self.expiry[key]:
+                return self.data[key]
+            else:
+                del self.data[key]
+                del self.expiry[key]
+        return None
+
+    def invalidate(self, user_id):
+        # Remove all keys related to this user
+        keys_to_del = [k for k in self.data.keys() if str(user_id) in k]
+        for k in keys_to_del:
+            del self.data[k]
+            del self.expiry[k]
+
+ai_cache = SimpleCache()
+
 @router.get("/conversations")
 async def get_conversations(current_user: dict = Depends(get_current_user)):
-    """
-    Retrieve all conversation sessions for the current user.
-    """
-    db = get_database()
     user_id = str(current_user["_id"])
+    cache_key = f"conv_list_{user_id}"
     
+    cached = ai_cache.get(cache_key)
+    if cached: return cached
+
+    db = get_database()
     conversations = await db.conversations.find({"user_id": user_id}).sort("updated_at", -1).to_list(100)
     
     for conv in conversations:
         conv["_id"] = str(conv["_id"])
     
+    ai_cache.set(cache_key, conversations)
     return conversations
 
 @router.get("/conversations/{conversation_id}")
 async def get_conversation_messages(conversation_id: str, current_user: dict = Depends(get_current_user)):
-    """
-    Retrieve all messages for a specific conversation.
-    """
-    db = get_database()
     user_id = str(current_user["_id"])
+    cache_key = f"msgs_{conversation_id}_{user_id}"
     
-    # Verify ownership
+    cached = ai_cache.get(cache_key)
+    if cached: return cached
+
+    db = get_database()
     conv = await db.conversations.find_one({"_id": ObjectId(conversation_id), "user_id": user_id})
     if not conv:
         raise HTTPException(status_code=404, detail="Conversation not found")
@@ -43,19 +75,18 @@ async def get_conversation_messages(conversation_id: str, current_user: dict = D
     for msg in messages:
         msg["_id"] = str(msg["_id"])
         
+    ai_cache.set(cache_key, messages)
     return messages
 
 @router.delete("/conversations/{conversation_id}")
 async def delete_conversation(conversation_id: str, current_user: dict = Depends(get_current_user)):
-    """
-    Delete a specific conversation and all its messages.
-    """
     db = get_database()
     user_id = str(current_user["_id"])
     
     await db.conversations.delete_one({"_id": ObjectId(conversation_id), "user_id": user_id})
     await db.chat_messages.delete_many({"conversation_id": conversation_id})
     
+    ai_cache.invalidate(user_id)
     return {"message": "Conversation deleted", "status": "success"}
 
 @router.post("/chat")
@@ -65,20 +96,15 @@ async def chat_with_agent(
     file: UploadFile = File(None),
     current_user: dict = Depends(get_current_user)
 ):
-    """
-    AI Health Assistant Endpoint with Session Support
-    """
     db = get_database()
     user_id = str(current_user["_id"])
     
-    # --- Rate Limiting (Optional but good) ---
-    # ... (can be kept from previous version if desired) ...
+    # Invalidate cache for this user since we are adding a new message
+    ai_cache.invalidate(user_id)
 
-    # 1. Handle Conversation Session
     is_new_chat = False
     if not conversation_id or conversation_id == "null":
         is_new_chat = True
-        # Generate title from first message
         title = message[:40] + ("..." if len(message) > 40 else "")
         conv_doc = {
             "user_id": user_id,
@@ -89,13 +115,11 @@ async def chat_with_agent(
         result = await db.conversations.insert_one(conv_doc)
         conversation_id = str(result.inserted_id)
     else:
-        # Update timestamp for sorting
         await db.conversations.update_one(
             {"_id": ObjectId(conversation_id)},
             {"$set": {"updated_at": datetime.utcnow()}}
         )
 
-    # 2. Save user message
     user_msg_doc = {
         "user_id": user_id,
         "conversation_id": conversation_id,
@@ -105,7 +129,6 @@ async def chat_with_agent(
     }
     await db.chat_messages.insert_one(user_msg_doc)
 
-    # 3. Get Context (Latest Prediction)
     latest_pred = await db.predictions.find_one(
         {"user_id": user_id},
         sort=[("timestamp", -1)]
@@ -114,7 +137,6 @@ async def chat_with_agent(
     if latest_pred:
         pred_context = f"Latest Diagnosis: {latest_pred['prediction']}, Confidence: {(latest_pred['confidence'] * 100):.1f}%, Date: {latest_pred['timestamp'].strftime('%Y-%m-%d')}"
 
-    # 4. Generate AI Reply
     api_key = os.getenv("GOOGLE_API_KEY")
     reply = ""
     mode = "fallback"
@@ -152,10 +174,8 @@ async def chat_with_agent(
             print(f"Gemini API Error: {e}")
 
     if not reply:
-        # --- Basic Fallback logic ... (kept simple for brevity) ---
         reply = f"I am currently operating in basic mode. Regarding your query about '{message[:20]}...', please ensure you consult a cardiologist for clinical advice."
 
-    # 5. Save bot reply
     bot_msg_doc = {
         "user_id": user_id,
         "conversation_id": conversation_id,
