@@ -20,8 +20,11 @@ async def validate_ecg_with_gemini(image_bytes: bytes) -> bool:
     if not api_key: return True
         
     try:
-        # Use a slightly larger thumbnail for better identification accuracy
+        # Resize slightly and ENSURE RGB mode (fixes the RGBA to JPEG crash)
         img = Image.open(io.BytesIO(image_bytes))
+        if img.mode in ("RGBA", "P"):
+            img = img.convert("RGB")
+        
         img.thumbnail((512, 512)) 
         
         thumb_io = io.BytesIO()
@@ -29,31 +32,29 @@ async def validate_ecg_with_gemini(image_bytes: bytes) -> bool:
         thumb_image = Image.open(io.BytesIO(thumb_io.getvalue()))
         
         genai.configure(api_key=api_key)
-        # Use a stable flash model
-        model = genai.GenerativeModel('gemini-1.5-flash')
+        # Use the model that is confirmed to work in your environment
+        model = genai.GenerativeModel('gemini-2.5-flash-lite')
         
         prompt = (
-            "As a medical image classifier, determine if this image is a Cardiac ECG/EKG plot or a heart rate waveform. "
-            "If it is an ECG plot, reply exactly with 'YES'. "
-            "If it is anything else (photos of people, scenery, text, or non-medical charts), reply exactly with 'NO'."
+            "CRITICAL MEDICAL VALIDATION: Determine if this image is a Cardiac ECG/EKG strip or plot. "
+            "If the image contains heart rhythm waveforms (P-QRS-T complexes), reply with 'YES'. "
+            "If the image is a person, a document, a landscape, or any other non-ECG image, you MUST reply with 'NO'. "
+            "Be extremely strict. Reply ONLY with 'YES' or 'NO'."
         )
         
-        # We have a 7s window, so we can afford a 6s timeout for accuracy
         response = await model.generate_content_async([prompt, thumb_image])
         
         if not response.candidates: return False
         
         result_text = response.text.strip().upper()
-        print(f"DEBUG: AI Raw Response: {result_text}")
+        print(f"DEBUG: AI Validation Response: {result_text}")
         
-        # Strict matching
-        if "YES" in result_text and "NO" not in result_text:
-            return True
-        return False
+        # Strict validation: Only 'YES' is allowed
+        return "YES" in result_text and "NO" not in result_text
         
     except Exception as e:
-        print(f"DEBUG: AI Validation Exception: {e}")
-        # On technical error, we allow it but log it
+        print(f"DEBUG: AI Validation Exception (Skipped): {e}")
+        # If the AI itself fails technically, we'll allow it but log it.
         return True
 
 async def background_cloud_upload(prediction_id: str, image_bytes: bytes):

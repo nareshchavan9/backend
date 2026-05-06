@@ -3,6 +3,8 @@ from app.middleware.auth_middleware import get_current_user, check_role
 from app.database.db import get_database
 from app.services.report_service import generate_pdf_report
 from bson import ObjectId
+import re
+import time
 
 router = APIRouter()
 
@@ -11,55 +13,53 @@ async def get_report(
     prediction_id: str,
     current_user: dict = Depends(get_current_user)
 ):
+    start_time = time.time()
     db = get_database()
-    prediction = await db["predictions"].find_one({"_id": ObjectId(prediction_id)})
     
+    # 1. Fetch prediction record
+    prediction = await db["predictions"].find_one({"_id": ObjectId(prediction_id)})
     if not prediction:
         raise HTTPException(status_code=404, detail="Prediction not found")
     
-    # Security: Ensure user can only access their own reports unless they are doctor/admin
+    # Security check
     if str(prediction["user_id"]) != str(current_user["_id"]) and current_user["role"] not in ["doctor", "admin"]:
         raise HTTPException(status_code=403, detail="Not authorized to view this report")
     
-    # Identify Patient and Doctor
-    raw_user = await db["users"].find_one({"_id": ObjectId(prediction["user_id"])})
+    # 2. INSTANT METADATA RESOLUTION
+    # Use denormalized data to avoid additional DB lookups
+    patient_data = {
+        "name": prediction.get("patient_name", "Unknown Patient"),
+        "email": "N/A (Clinical Records)",
+        "age": "N/A",
+        "gender": "N/A"
+    }
     
-    patient_data = raw_user
-    doctor = None
-    
-    # If the record is stored under a doctor's ID (clinical patient)
-    if raw_user and raw_user.get("role") in ["doctor", "admin"]:
-        doctor = raw_user
-        # Extract patient info from notes
-        import re
-        notes = prediction.get("notes", "")
-        p_name = re.search(r"Patient:\s*([^|]+)", notes)
-        p_age = re.search(r"Age:\s*(\d+)", notes)
-        p_gender = re.search(r"Gender:\s*(\w+)", notes)
-        
-        patient_data = {
-            "name": p_name.group(1).strip() if p_name else "Clinical Patient",
-            "email": "N/A (Clinical)",
-            "age": p_age.group(1) if p_age else "N/A",
-            "gender": p_gender.group(1) if p_gender else "N/A"
-        }
-    
-    # Also check explicit doctor_id field (for newer records)
-    doctor_id = prediction.get("doctor_id")
-    if doctor_id:
+    # Quick regex for age/gender
+    notes = prediction.get("notes", "")
+    if notes:
         try:
-            explicit_doctor = await db["users"].find_one({"_id": ObjectId(doctor_id)})
-            if explicit_doctor:
-                doctor = explicit_doctor
-        except:
-            pass
-            
-    pdf_buffer = generate_pdf_report(prediction, patient_data, doctor)
+            age_match = re.search(r"Age:\s*(\d+)", notes)
+            gender_match = re.search(r"Gender:\s*(\w+)", notes)
+            if age_match: patient_data["age"] = age_match.group(1)
+            if gender_match: patient_data["gender"] = gender_match.group(1)
+        except: pass
+
+    doctor_data = {"name": prediction.get("doctor_name", "Clinical Automated System")}
+    
+    # 3. Generate PDF
+    pdf_buffer = generate_pdf_report(prediction, patient_data, doctor_data)
+    
+    generation_time = (time.time() - start_time) * 1000 # in ms
+    print(f"REPORT GENERATED IN {generation_time:.2f}ms")
     
     return Response(
         content=pdf_buffer.getvalue(),
         media_type="application/pdf",
-        headers={"Content-Disposition": f"attachment; filename=report_{prediction_id}.pdf"}
+        headers={
+            "Content-Disposition": f"attachment; filename=report_{prediction_id}.pdf",
+            "X-Process-Time": f"{generation_time:.2f}ms",
+            "Cache-Control": "no-cache" # Force fresh for testing
+        }
     )
 
 @router.get("/admin/patients", dependencies=[Depends(check_role(["doctor", "admin"]))])
@@ -67,7 +67,5 @@ async def get_all_patients():
     db = get_database()
     cursor = db["users"].find({"role": "patient"}, {"password_hash": 0})
     patients = await cursor.to_list(length=100)
-    
-    for p in patients:
-        p["_id"] = str(p["_id"])
+    for p in patients: p["_id"] = str(p["_id"])
     return patients

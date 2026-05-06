@@ -36,7 +36,9 @@ def generate_pdf_report(prediction_data: dict, user_data: dict, doctor_data: dic
 
     p.setFont("Helvetica", 8)
     p.setFillColor(white)
-    p.drawRightString(width - 40, height - 45, f"ID: {prediction_data.get('id', 'N/A')[-12:].upper()}")
+    # Correcting the field from 'id' to '_id' to match MongoDB records
+    case_id = str(prediction_data.get('_id', 'N/A'))
+    p.drawRightString(width - 40, height - 45, f"CASE ID: {case_id[-12:].upper()}")
     p.drawRightString(width - 40, height - 60, datetime.now().strftime('%Y-%m-%d %H:%M'))
 
     y = height - 120
