@@ -8,47 +8,60 @@ from bson import ObjectId
 router = APIRouter()
 
 async def populate_history_metadata(history, db):
+    if not history:
+        return []
+
+    # 1. Collect all unique User IDs (patients and doctors)
+    user_ids_to_fetch = set()
+    for item in history:
+        uid = item.get("user_id")
+        did = item.get("doctor_id")
+        if uid and ObjectId.is_valid(str(uid)):
+            user_ids_to_fetch.add(ObjectId(str(uid)))
+        if did and ObjectId.is_valid(str(did)):
+            user_ids_to_fetch.add(ObjectId(str(did)))
+
+    # 2. Fetch all users in one batch
+    users_map = {}
+    if user_ids_to_fetch:
+        users_cursor = db["users"].find({"_id": {"$in": list(user_ids_to_fetch)}}, {"name": 1, "role": 1})
+        async for user in users_cursor:
+            users_map[str(user["_id"])] = user
+
+    # 3. Process history items using the pre-fetched map
     for item in history:
         item["_id"] = str(item["_id"])
         
-        # Populate Patient Name
+        # Determine Patient Name
         notes = item.get("notes", "")
+        patient_name_from_notes = ""
         if notes and "Patient:" in notes:
             try:
-                item["patient_name"] = notes.split("Patient:")[1].split("|")[0].strip()
-            except:
-                item["patient_name"] = "Clinical Patient"
-        elif "user_id" in item:
-            try:
-                user = await db["users"].find_one({"_id": ObjectId(item["user_id"])}, {"name": 1})
-                item["patient_name"] = user.get("name", "Unknown") if user else "Unknown"
-            except:
-                item["patient_name"] = "Unknown"
+                patient_name_from_notes = notes.split("Patient:")[1].split("|")[0].strip()
+            except: pass
+
+        if patient_name_from_notes:
+            item["patient_name"] = patient_name_from_notes
         else:
-            item["patient_name"] = "Unknown"
+            uid_str = str(item.get("user_id"))
+            user_data = users_map.get(uid_str)
+            item["patient_name"] = user_data.get("name", "Unknown") if user_data else "Unknown"
             
-        # Populate Doctor Name
-        doctor_id = item.get("doctor_id")
-        if doctor_id:
-            try:
-                doctor = await db["users"].find_one({"_id": ObjectId(doctor_id)}, {"name": 1})
-                item["doctor_name"] = f"Dr. {doctor.get('name')}" if doctor else "Unknown Doctor"
-            except:
-                item["doctor_name"] = "Unknown Doctor"
+        # Determine Doctor Name
+        did_str = str(item.get("doctor_id"))
+        doctor_data = users_map.get(did_str)
+        
+        if doctor_data:
+            item["doctor_name"] = f"Dr. {doctor_data.get('name')}"
         else:
-            # Fallback/Check if the user_id itself is a doctor (for clinical patients)
-            try:
-                uid = item.get("user_id")
-                if uid and ObjectId.is_valid(uid):
-                    user = await db["users"].find_one({"_id": ObjectId(uid)})
-                    if user and user.get("role") in ["doctor", "admin"]:
-                        item["doctor_name"] = f"Dr. {user.get('name')}"
-                    else:
-                        item["doctor_name"] = "Self-Tested"
-                else:
-                    item["doctor_name"] = "System"
-            except:
-                item["doctor_name"] = "N/A"
+            # Fallback check for self-tested or system
+            uid_str = str(item.get("user_id"))
+            u_data = users_map.get(uid_str)
+            if u_data and u_data.get("role") in ["doctor", "admin"]:
+                item["doctor_name"] = f"Dr. {u_data.get('name')}"
+            else:
+                item["doctor_name"] = "Self-Tested" if u_data else "System"
+
     return history
 
 @router.get("/all", dependencies=[Depends(check_role(["doctor", "admin"]))])

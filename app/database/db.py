@@ -16,7 +16,8 @@ async def connect_to_mongo():
     
     # Create indexes for performance
     await db.db.predictions.create_index([("user_id", 1), ("timestamp", -1)])
-    await db.db.chat_history.create_index([("user_id", 1), ("timestamp", 1)])
+    await db.db.conversations.create_index([("user_id", 1), ("updated_at", -1)])
+    await db.db.chat_messages.create_index([("conversation_id", 1), ("timestamp", 1)])
     
     print(f"Connected to MongoDB: {os.getenv('DATABASE_NAME')} and initialized indexes")
 
