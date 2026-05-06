@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException, status, File, UploadFile, Form
+from fastapi import APIRouter, Depends, HTTPException, status, File, UploadFile, Form, BackgroundTasks
 from app.models.user import UserCreate, UserLogin, Token, UserResponse, OTPVerify
 from app.database.db import get_database
 from app.utils.auth_utils import get_password_hash, verify_password, create_access_token
@@ -31,7 +31,7 @@ async def register(user: UserCreate):
     return created_user
 
 @router.post("/login")
-async def login(user_data: UserLogin):
+async def login(user_data: UserLogin, background_tasks: BackgroundTasks):
     db = get_database()
     user = await db["users"].find_one({"email": user_data.email})
     
@@ -53,7 +53,7 @@ async def login(user_data: UserLogin):
         )
         
         # Send OTP email
-        send_otp_email(user_data.email, otp)
+        background_tasks.add_task(send_otp_email, user_data.email, otp)
         
         return {
             "requires_2fa": True,
