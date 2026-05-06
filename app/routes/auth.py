@@ -1,5 +1,5 @@
 from fastapi import APIRouter, Depends, HTTPException, status, File, UploadFile, Form
-from app.models.user import UserCreate, UserLogin, Token, UserResponse, OTPVerify
+from app.models.user import UserCreate, UserLogin, Token, UserResponse
 from app.database.db import get_database
 from app.utils.auth_utils import get_password_hash, verify_password, create_access_token
 from app.middleware.auth_middleware import get_current_user
@@ -41,59 +41,6 @@ async def login(user_data: UserLogin):
             headers={"WWW-Authenticate": "Bearer"},
         )
     
-    if user.get("two_factor_enabled"):
-        # Generate 6-digit OTP
-        otp = str(random.randint(100000, 999999))
-        otp_expiry = datetime.utcnow() + timedelta(minutes=5)
-        
-        await db["users"].update_one(
-            {"email": user_data.email},
-            {"$set": {"otp": otp, "otp_expiry": otp_expiry}}
-        )
-        
-        # Log OTP for development/clinical access (since email is removed)
-        print(f"DEBUG: 2FA OTP for {user_data.email}: {otp}")
-        
-        return {
-            "requires_2fa": True,
-            "email": user["email"]
-        }
-    else:
-        access_token = create_access_token(data={"sub": user["email"], "role": user["role"]})
-        return {
-            "access_token": access_token, 
-            "token_type": "bearer",
-            "role": user["role"],
-            "name": user["name"],
-            "profile_image": user.get("profile_image"),
-            "email": user["email"],
-            "requires_2fa": False,
-            "two_factor_enabled": user.get("two_factor_enabled", False)
-        }
-
-@router.post("/verify-otp", response_model=Token)
-async def verify_otp(otp_data: OTPVerify):
-    db = get_database()
-    user = await db["users"].find_one({"email": otp_data.email})
-    
-    if not user:
-        raise HTTPException(status_code=404, detail="User not found")
-        
-    if "otp" not in user or "otp_expiry" not in user:
-        raise HTTPException(status_code=400, detail="OTP not generated")
-        
-    if datetime.utcnow() > user["otp_expiry"]:
-        raise HTTPException(status_code=400, detail="OTP expired")
-        
-    if user["otp"] != otp_data.otp:
-        raise HTTPException(status_code=400, detail="Invalid OTP")
-        
-    # Clear OTP after successful verification
-    await db["users"].update_one(
-        {"email": otp_data.email},
-        {"$unset": {"otp": "", "otp_expiry": ""}}
-    )
-    
     access_token = create_access_token(data={"sub": user["email"], "role": user["role"]})
     return {
         "access_token": access_token, 
@@ -101,8 +48,7 @@ async def verify_otp(otp_data: OTPVerify):
         "role": user["role"],
         "name": user["name"],
         "profile_image": user.get("profile_image"),
-        "email": user["email"],
-        "two_factor_enabled": user.get("two_factor_enabled", False)
+        "email": user["email"]
     }
 
 @router.post("/lifestyle-notes")
@@ -184,15 +130,3 @@ async def reset_password(data: dict):
     )
     
     return {"message": "Password reset successful"}
-
-@router.post("/toggle-2fa")
-async def toggle_2fa(data: dict, current_user: dict = Depends(get_current_user)):
-    db = get_database()
-    enabled = data.get("enabled", False)
-    
-    await db["users"].update_one(
-        {"_id": ObjectId(current_user["_id"])},
-        {"$set": {"two_factor_enabled": enabled}}
-    )
-    
-    return {"message": "2FA status updated", "two_factor_enabled": enabled}
