@@ -1,23 +1,20 @@
-import smtplib
-from email.mime.text import MIMEText
-from email.mime.multipart import MIMEMultipart
 import os
+import requests
 from dotenv import load_dotenv
 
 load_dotenv()
 
 def send_otp_email(receiver_email: str, otp: str):
-    sender_email = os.getenv("EMAIL_SENDER", "your-email@gmail.com")
-    password = os.getenv("EMAIL_PASSWORD", "your-app-password")
+    resend_api_key = os.getenv("RESEND_API_KEY")
     
-    if sender_email == "your-email@gmail.com":
+    # Fallback to mock if no API key is provided
+    if not resend_api_key:
         print(f"Mock sending OTP {otp} to {receiver_email}")
         return True
 
-    message = MIMEMultipart("alternative")
-    message["Subject"] = "Your Verification Code"
-    message["From"] = sender_email
-    message["To"] = receiver_email
+    # Note: On a free Resend tier without a verified domain, 
+    # you MUST use 'onboarding@resend.dev' as the from email.
+    sender_email = os.getenv("EMAIL_SENDER", "onboarding@resend.dev")
 
     html = f"""\
     <!DOCTYPE html>
@@ -69,14 +66,23 @@ def send_otp_email(receiver_email: str, otp: str):
     </html>
     """
     
-    part = MIMEText(html, "html")
-    message.attach(part)
+    headers = {
+        "Authorization": f"Bearer {resend_api_key}",
+        "Content-Type": "application/json"
+    }
+
+    payload = {
+        "from": sender_email,
+        "to": [receiver_email],
+        "subject": "Your Verification Code",
+        "html": html
+    }
 
     try:
-        with smtplib.SMTP_SSL("smtp.gmail.com", 465, timeout=5) as server:
-            server.login(sender_email, password)
-            server.sendmail(sender_email, receiver_email, message.as_string())
+        response = requests.post("https://api.resend.com/emails", json=payload, headers=headers)
+        response.raise_for_status()
         return True
-    except Exception as e:
-        print(f"Error sending email: {e}")
+    except requests.exceptions.RequestException as e:
+        print(f"Error sending email via Resend: {e}")
+        print(f"Response: {e.response.text if hasattr(e, 'response') and e.response else 'No response body'}")
         return False
