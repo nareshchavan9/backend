@@ -58,8 +58,20 @@ async def validate_ecg_with_gemini(image_bytes: bytes) -> bool:
         return True
 
 async def background_cloud_upload(prediction_id: str, image_bytes: bytes):
+    """
+    Optimized cloud upload: Resizes image to web-standard before sync to save bandwidth.
+    """
     try:
-        cloud_url = upload_image_to_cloud(image_bytes)
+        # Optimization: Resize for the web before uploading to Cloudinary
+        img = Image.open(io.BytesIO(image_bytes))
+        if img.width > 1200:
+            img.thumbnail((1200, 1200))
+        
+        opt_io = io.BytesIO()
+        img.save(opt_io, format='JPEG', quality=85)
+        optimized_bytes = opt_io.getvalue()
+        
+        cloud_url = upload_image_to_cloud(optimized_bytes)
         if cloud_url:
             db = get_database()
             from bson import ObjectId
@@ -67,8 +79,9 @@ async def background_cloud_upload(prediction_id: str, image_bytes: bytes):
                 {"_id": ObjectId(prediction_id)},
                 {"$set": {"image_path": cloud_url}}
             )
+            print(f"DEBUG: Background Cloud Sync Complete for {prediction_id}")
     except Exception as e:
-        print(f"Background Cloud Sync Failed: {e}")
+        print(f"DEBUG: Background Cloud Sync Failed: {e}")
 
 async def run_prediction(image_bytes: bytes, user_id: str, filename: str, notes: str = "", doctor_id: str = None, background_tasks: BackgroundTasks = None):
     start_time = time.time()
