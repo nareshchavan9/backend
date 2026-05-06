@@ -103,13 +103,13 @@ async def chat_with_agent(
     user_msg_doc = {"user_id": user_id, "conversation_id": conversation_id, "text": message, "sender": "user", "timestamp": datetime.utcnow()}
     await db.chat_messages.insert_one(user_msg_doc)
 
-    # 3. Context Fetch
+    # 3. Fast Context Fetch
     latest_pred = await db.predictions.find_one({"user_id": user_id}, {"prediction": 1, "confidence": 1, "timestamp": 1}, sort=[("timestamp", -1)])
     pred_context = "No previous reports found."
     if latest_pred:
         pred_context = f"Latest Diagnosis: {latest_pred['prediction']}, Confidence: {(latest_pred['confidence'] * 100):.1f}%, Date: {latest_pred['timestamp'].strftime('%Y-%m-%d')}"
 
-    # 4. Gemini Interaction (Simplified for Compatibility)
+    # 4. Optimized Gemini 2.5 Flash Lite
     api_key = os.getenv("GOOGLE_API_KEY")
     reply = ""
     mode = "fallback"
@@ -119,20 +119,18 @@ async def chat_with_agent(
             genai.configure(api_key=api_key)
             role = current_user.get('role', 'patient')
             
-            # Switch to 1.5-flash which has a 1,500 requests/day limit
-            # instead of the preview version which only has 20.
-            try:
-                model = genai.GenerativeModel('gemini-1.5-flash')
-            except:
-                model = genai.GenerativeModel('gemini-pro')
-            
-            system_prompt = (
-                f"SYSTEM: You are a medical AI assistant for Arrhythmia Detection. User: {current_user.get('name')} ({role}). "
+            system_instruction = (
+                f"You are a Clinical AI for Arrhythmia Detection. User: {current_user.get('name')} ({role}). "
                 f"LATEST REPORT: {pred_context}. "
-                f"Be professional and helpful. Disclaimer: AI, not a doctor."
+                f"Give concise, professional answers. AI disclaimer included."
             )
             
-            inputs = [system_prompt, message]
+            model = genai.GenerativeModel(
+                model_name='gemini-2.5-flash-lite',
+                system_instruction=system_instruction
+            )
+            
+            inputs = [message]
             if file:
                 file_bytes = await file.read()
                 if file.content_type.startswith("image/"):
@@ -141,12 +139,20 @@ async def chat_with_agent(
                 else:
                     inputs.append({"mime_type": file.content_type, "data": file_bytes})
             
-            # Using async call to prevent blocking the event loop
-            response = await model.generate_content_async(inputs)
+            # Use generation config for speed
+            response = await model.generate_content_async(
+                inputs,
+                generation_config=genai.types.GenerationConfig(
+                    max_output_tokens=800,
+                    temperature=0.4, # Lower temperature = faster/more direct
+                    top_p=0.8,
+                    top_k=40
+                )
+            )
             reply = response.text
             mode = "gemini"
         except Exception as e:
-            print(f"DEBUG: Gemini Interaction Error: {e}")
+            print(f"DEBUG: Gemini Turbo Error: {e}")
 
     if not reply:
         reply = "I'm having trouble connecting to my AI core. Please check your network or try again later."
