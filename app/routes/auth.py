@@ -1,10 +1,9 @@
-from fastapi import APIRouter, Depends, HTTPException, status, File, UploadFile, Form, BackgroundTasks
+from fastapi import APIRouter, Depends, HTTPException, status, File, UploadFile, Form
 from app.models.user import UserCreate, UserLogin, Token, UserResponse, OTPVerify
 from app.database.db import get_database
 from app.utils.auth_utils import get_password_hash, verify_password, create_access_token
 from app.middleware.auth_middleware import get_current_user
 from app.services.cloudinary_service import upload_image_to_cloud
-from app.utils.emailsender import send_otp_email
 import random
 from datetime import timedelta, datetime
 from typing import Optional, List
@@ -31,7 +30,7 @@ async def register(user: UserCreate):
     return created_user
 
 @router.post("/login")
-async def login(user_data: UserLogin, background_tasks: BackgroundTasks):
+async def login(user_data: UserLogin):
     db = get_database()
     user = await db["users"].find_one({"email": user_data.email})
     
@@ -52,8 +51,8 @@ async def login(user_data: UserLogin, background_tasks: BackgroundTasks):
             {"$set": {"otp": otp, "otp_expiry": otp_expiry}}
         )
         
-        # Send OTP email
-        background_tasks.add_task(send_otp_email, user_data.email, otp)
+        # Log OTP for development/clinical access (since email is removed)
+        print(f"DEBUG: 2FA OTP for {user_data.email}: {otp}")
         
         return {
             "requires_2fa": True,
