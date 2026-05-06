@@ -16,4 +16,3 @@ pytest
 httpx
 cloudinary
 google-generativeai>=0.5.0
-requests
