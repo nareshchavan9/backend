@@ -1,4 +1,4 @@
-from fastapi import APIRouter, UploadFile, File, Depends, HTTPException, Form, Query
+from fastapi import APIRouter, UploadFile, File, Depends, HTTPException, Form, Query, BackgroundTasks
 from typing import Optional, List
 from app.middleware.auth_middleware import get_current_user, check_role
 from app.services.predict_service import run_prediction
@@ -14,13 +14,9 @@ async def populate_history_metadata(history, db):
     if not history:
         return []
 
-    # 1. Check which records already have denormalized names
-    # and collect only missing IDs to fetch in one batch
     user_ids_to_fetch = set()
     for item in history:
         item["_id"] = str(item["_id"])
-        
-        # If denormalized names are missing, collect IDs
         if not item.get("patient_name") or not item.get("doctor_name"):
             uid = item.get("user_id")
             did = item.get("doctor_id")
@@ -29,30 +25,23 @@ async def populate_history_metadata(history, db):
             if did and ObjectId.is_valid(str(did)):
                 user_ids_to_fetch.add(ObjectId(str(did)))
 
-    # 2. Fetch missing users in one batch
     users_map = {}
     if user_ids_to_fetch:
         users_cursor = db["users"].find({"_id": {"$in": list(user_ids_to_fetch)}}, {"name": 1, "role": 1})
         async for user in users_cursor:
             users_map[str(user["_id"])] = user
 
-    # 3. Process history items
     for item in history:
-        # Use denormalized patient name if available, otherwise fallback
         if not item.get("patient_name"):
-            # Check notes first (legacy)
             notes = item.get("notes", "")
             if notes and "Patient:" in notes:
-                try:
-                    item["patient_name"] = notes.split("Patient:")[1].split("|")[0].strip()
+                try: item["patient_name"] = notes.split("Patient:")[1].split("|")[0].strip()
                 except: pass
-            
             if not item.get("patient_name"):
                 uid_str = str(item.get("user_id"))
                 user_data = users_map.get(uid_str)
                 item["patient_name"] = user_data.get("name", "Unknown") if user_data else "Unknown"
             
-        # Use denormalized doctor name if available
         if not item.get("doctor_name"):
             did_str = str(item.get("doctor_id"))
             doctor_data = users_map.get(did_str)
@@ -69,23 +58,19 @@ async def populate_history_metadata(history, db):
     return history
 
 # -------------------------------------------------------------------------
-# OPTIMIZATION: PAGINATION & PROJECTION
+# ROUTES
 # -------------------------------------------------------------------------
 @router.get("/all", dependencies=[Depends(check_role(["doctor", "admin"]))])
-async def get_all_predictions(
-    page: int = Query(1, ge=1),
-    limit: int = Query(20, le=100)
-):
+async def get_all_predictions(page: int = Query(1, ge=1), limit: int = Query(20, le=100)):
     db = get_database()
     skip = (page - 1) * limit
-    
-    # PROJECTION: Exclude breakdown for list view to reduce bandwidth
     cursor = db["predictions"].find({}, {"breakdown": 0}).sort("timestamp", -1).skip(skip).limit(limit)
     history = await cursor.to_list(length=limit)
     return await populate_history_metadata(history, db)
 
 @router.post("/")
 async def predict_ecg(
+    background_tasks: BackgroundTasks,
     file: UploadFile = File(...),
     patient_id: Optional[str] = Form(None),
     patient_name: Optional[str] = Form(None),
@@ -104,42 +89,26 @@ async def predict_ecg(
     if patient_name:
         notes = f"Patient: {patient_name} | Age: {patient_age} | Gender: {patient_gender}"
     
-    result = await run_prediction(image_bytes, user_id, file.filename, notes=notes, doctor_id=doctor_id)
+    # PASSING background_tasks here for optimized speed
+    result = await run_prediction(image_bytes, user_id, file.filename, notes=notes, doctor_id=doctor_id, background_tasks=background_tasks)
     return result
 
 @router.get("/history")
-async def get_history(
-    page: int = Query(1, ge=1),
-    limit: int = Query(20, le=100),
-    current_user: dict = Depends(get_current_user)
-):
+async def get_history(page: int = Query(1, ge=1), limit: int = Query(20, le=100), current_user: dict = Depends(get_current_user)):
     db = get_database()
     skip = (page - 1) * limit
-    
-    # PROJECTION: Exclude breakdown for list view
-    cursor = db["predictions"].find(
-        {"user_id": current_user["_id"]}, 
-        {"breakdown": 0}
-    ).sort("timestamp", -1).skip(skip).limit(limit)
-    
+    cursor = db["predictions"].find({"user_id": current_user["_id"]}, {"breakdown": 0}).sort("timestamp", -1).skip(skip).limit(limit)
     history = await cursor.to_list(length=limit)
     return await populate_history_metadata(history, db)
 
 @router.get("/history/unified/{identifier}", dependencies=[Depends(check_role(["doctor", "admin"]))])
-async def get_unified_patient_history(
-    identifier: str,
-    page: int = Query(1, ge=1),
-    limit: int = Query(20, le=100)
-):
+async def get_unified_patient_history(identifier: str, page: int = Query(1, ge=1), limit: int = Query(20, le=100)):
     db = get_database()
     skip = (page - 1) * limit
     import re
-    
-    # Try treating identifier as a User ID
     try:
         user_obj_id = ObjectId(identifier)
         user = await db["users"].find_one({"_id": user_obj_id})
-        
         if user:
             cursor = db["predictions"].find({
                 "$or": [
@@ -150,17 +119,14 @@ async def get_unified_patient_history(
             }, {"breakdown": 0}).sort("timestamp", -1).skip(skip).limit(limit)
             history = await cursor.to_list(length=limit)
             return await populate_history_metadata(history, db)
-    except:
-        pass
+    except: pass
 
-    # Treat identifier as a Name directly
     cursor = db["predictions"].find({
         "$or": [
             {"notes": {"$regex": f"Patient: {identifier}"}},
             {"patient_name": {"$regex": identifier, "$options": "i"}}
         ]
     }, {"breakdown": 0}).sort("timestamp", -1).skip(skip).limit(limit)
-    
     history = await cursor.to_list(length=limit)
     return await populate_history_metadata(history, db)
 
@@ -168,16 +134,13 @@ async def get_unified_patient_history(
 async def delete_prediction(prediction_id: str):
     db = get_database()
     result = await db["predictions"].delete_one({"_id": ObjectId(prediction_id)})
-    if result.deleted_count == 0:
-        raise HTTPException(status_code=404, detail="Prediction not found")
+    if result.deleted_count == 0: raise HTTPException(status_code=404, detail="Prediction not found")
     return {"message": "Prediction deleted successfully"}
 
 @router.get("/{prediction_id}")
 async def get_prediction_detail(prediction_id: str):
     db = get_database()
     prediction = await db["predictions"].find_one({"_id": ObjectId(prediction_id)})
-    if not prediction:
-        raise HTTPException(status_code=404, detail="Prediction not found")
-    
+    if not prediction: raise HTTPException(status_code=404, detail="Prediction not found")
     history = await populate_history_metadata([prediction], db)
     return history[0]
