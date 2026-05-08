@@ -48,7 +48,11 @@ async def login(user_data: UserLogin):
         "role": user["role"],
         "name": user["name"],
         "profile_image": user.get("profile_image"),
-        "email": user["email"]
+        "email": user["email"],
+        "age": user.get("age"),
+        "gender": user.get("gender"),
+        "phone_number": user.get("phone_number"),
+        "blood_group": user.get("blood_group")
     }
 
 @router.post("/lifestyle-notes")
@@ -79,6 +83,10 @@ async def get_me(current_user: dict = Depends(get_current_user)):
 async def update_profile(
     name: str = Form(...),
     email: str = Form(...),
+    age: Optional[int] = Form(None),
+    gender: Optional[str] = Form(None),
+    phone_number: Optional[str] = Form(None),
+    blood_group: Optional[str] = Form(None),
     image: Optional[UploadFile] = File(None),
     current_user: dict = Depends(get_current_user)
 ):
@@ -92,7 +100,11 @@ async def update_profile(
 
     update_data = {
         "name": name,
-        "email": email
+        "email": email,
+        "age": age,
+        "gender": gender,
+        "phone_number": phone_number,
+        "blood_group": blood_group
     }
 
     if image:

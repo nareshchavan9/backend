@@ -61,10 +61,19 @@ async def populate_history_metadata(history, db):
 # ROUTES
 # -------------------------------------------------------------------------
 @router.get("/all", dependencies=[Depends(check_role(["doctor", "admin"]))])
-async def get_all_predictions(page: int = Query(1, ge=1), limit: int = Query(20, le=100)):
+async def get_all_predictions(page: int = Query(1, ge=1), limit: int = Query(20, le=100), search: Optional[str] = Query(None)):
     db = get_database()
     skip = (page - 1) * limit
-    cursor = db["predictions"].find({}, {"breakdown": 0}).sort("timestamp", -1).skip(skip).limit(limit)
+    
+    query = {}
+    if search:
+        query["$or"] = [
+            {"prediction": {"$regex": search, "$options": "i"}},
+            {"notes": {"$regex": search, "$options": "i"}},
+            {"patient_name": {"$regex": search, "$options": "i"}}
+        ]
+        
+    cursor = db["predictions"].find(query, {"breakdown": 0}).sort("timestamp", -1).skip(skip).limit(limit)
     history = await cursor.to_list(length=limit)
     return await populate_history_metadata(history, db)
 
@@ -94,10 +103,18 @@ async def predict_ecg(
     return result
 
 @router.get("/history")
-async def get_history(page: int = Query(1, ge=1), limit: int = Query(20, le=100), current_user: dict = Depends(get_current_user)):
+async def get_history(page: int = Query(1, ge=1), limit: int = Query(20, le=100), search: Optional[str] = Query(None), current_user: dict = Depends(get_current_user)):
     db = get_database()
     skip = (page - 1) * limit
-    cursor = db["predictions"].find({"user_id": current_user["_id"]}, {"breakdown": 0}).sort("timestamp", -1).skip(skip).limit(limit)
+    
+    query = {"user_id": current_user["_id"]}
+    if search:
+        query["$or"] = [
+            {"prediction": {"$regex": search, "$options": "i"}},
+            {"notes": {"$regex": search, "$options": "i"}}
+        ]
+        
+    cursor = db["predictions"].find(query, {"breakdown": 0}).sort("timestamp", -1).skip(skip).limit(limit)
     history = await cursor.to_list(length=limit)
     return await populate_history_metadata(history, db)
 

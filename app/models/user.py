@@ -13,6 +13,8 @@ class UserBase(BaseModel):
     role: UserRole = UserRole.PATIENT
     age: Optional[int] = None
     gender: Optional[str] = None
+    phone_number: Optional[str] = None
+    blood_group: Optional[str] = None
     medical_history: Optional[str] = None
     profile_image: Optional[str] = None
     lifestyle_notes: List[dict] = []

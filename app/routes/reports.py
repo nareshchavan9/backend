@@ -1,4 +1,5 @@
-from fastapi import APIRouter, Depends, HTTPException, Response
+from fastapi import APIRouter, Depends, HTTPException, Response, Query
+from typing import Optional
 from app.middleware.auth_middleware import get_current_user, check_role
 from app.database.db import get_database
 from app.services.report_service import generate_pdf_report
@@ -63,9 +64,15 @@ async def get_report(
     )
 
 @router.get("/admin/patients", dependencies=[Depends(check_role(["doctor", "admin"]))])
-async def get_all_patients():
+async def get_all_patients(search: Optional[str] = Query(None)):
     db = get_database()
-    cursor = db["users"].find({"role": "patient"}, {"password_hash": 0})
+    query = {"role": "patient"}
+    if search:
+        query["$or"] = [
+            {"name": {"$regex": search, "$options": "i"}},
+            {"email": {"$regex": search, "$options": "i"}}
+        ]
+    cursor = db["users"].find(query, {"password_hash": 0})
     patients = await cursor.to_list(length=100)
     for p in patients: p["_id"] = str(p["_id"])
     return patients
